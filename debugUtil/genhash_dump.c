@@ -14,7 +14,8 @@ static void dumpBlock_( struct flower_hash_lookup_block*hash, int opt ) {
 	}
 	else {
 		for( n = 0; n < opt; n++ )
-			snprintf( leader + n, 32 - n, "\t" );
+			leader[n] = '\t';
+		leader[n] = 0;
 	}
 	printf( "HASH TABLE: %p parent %p\n", hash, hash->parent );
 
@@ -80,6 +81,7 @@ static void dumpBlock_( struct flower_hash_lookup_block*hash, int opt ) {
 	buf[o] = 0;
 	printf( "%sUSED:%s\n", leader, buf );
 
+	if(0)
 	{
 		// output empty/full tree in-levels
 		int l;
@@ -107,7 +109,7 @@ static void dumpBlock_( struct flower_hash_lookup_block*hash, int opt ) {
 	}
 
 	{
-		// output empty/full tree in-levels
+		// output key data bytes tree in-levels
 		int l;
 		for( l = 0; l < 20; l++ ) {
 			int d; d = 0;

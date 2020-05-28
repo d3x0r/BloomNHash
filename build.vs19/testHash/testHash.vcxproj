@@ -99,6 +99,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(SolutionDir)/..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -129,6 +130,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(SolutionDir)/..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -141,9 +143,8 @@
     <ClInclude Include="..\..\genhash.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\genhash_sparse.c" />
-    <ClCompile Include="..\..\sack.c" />
     <ClCompile Include="..\..\testhash.c" />
+    <ClCompile Include="..\..\userDataPointer\genhash_sparse.c" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\ABOUT.md" />

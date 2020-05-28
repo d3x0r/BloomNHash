@@ -1,13 +1,17 @@
 
-// include common API
-#include "../genhash.h"
+#include "genhash.h"
 
-// include My structure definitions...
-#include "genhash_def.h"
 
-//
-#include "../debug/genhash_dump.c"
+//#include "../debugUtil/genhash_dump.c"
+	
 
+//#define FLOWER_HASH_DEBUG_MOVES
+//#define FLOWER_TICK_PERF_COUNTERS
+
+// this adds a bunch of sanity checks/ASSERT sort of debugging
+#define FLOWER_DIAGNOSTIC_DEBUG
+
+#ifdef FLOWER_TICK_PERF_COUNTERS
 
 struct perfTickCounters {
 	int moves_left;
@@ -17,6 +21,7 @@ struct perfTickCounters {
 
 };
 static struct perfTickCounters pft;
+#endif
 
 static struct flower_hash_lookup_block* convertFlowerHashBlock( struct flower_hash_lookup_block* hash );
 
@@ -37,6 +42,7 @@ static char* toBinary( int N ) {
 	return bits[cur++];
 }
 
+
 static int linearToTreeIndex( int f_ ) 
 {
 	int b;
@@ -50,9 +56,11 @@ static int linearToTreeIndex( int f_ )
 }
 
 static void* ReallocateAligned( void* p, size_t oldSize, size_t newSize, uint16_t align ){
-	void* newBlock = allocate_aligned( newSize, align );
-	memcpy( newBlock, p, oldSize );
-	free( p );
+	void* const newBlock = aa( align, newSize );
+	if( p ) {
+		memcpy( newBlock, p, oldSize );
+		fa( p );
+	}
 	return newBlock;
 }
 
@@ -66,18 +74,46 @@ static void expand_key_data_space( struct flower_hash_lookup_block *here ) {
 	here->info.key_data_blocks++;
 }
 
+
+static void squashKeyData( struct flower_hash_lookup_block* hash, int keyIndex ) {
+	FPI const offset = hash->key_data_offset[keyIndex];
+	uint8_t const length = hash->key_data_first_block[ offset - 1];
+	if( offset & 0x8000 ) DebugBreak();
+	//lprintf( "Squash is Moving over... %d   %d   %d\n", offset, hash->info.used_key_data, hash->info.used_key_data-(offset+length) );
+	//LogBinary( hash->key_data_first_block + offset - 1, hash->key_data_first_block[offset - 1] );
+	memmove( hash->key_data_first_block + offset - 1
+		, hash->key_data_first_block + length + offset
+		, hash->info.key_data_blocks * KEY_BLOCK_SIZE - ( length + offset ) );
+	//lprintf( "So it's now...\n" );
+	//LogBinary( hash->key_data_first_block + offset - 1, hash->key_data_first_block[offset - 1] );
+	for( int n = 0; n < KEY_DATA_ENTRIES; n++ ) {
+		if( hash->key_data_offset[n] > (offset+length) ) {
+			hash->key_data_offset[n] -= length+1;
+			if( hash->key_data_offset[n] & 0x8000 )DebugBreak();
+		}
+	}
+	hash->info.used_key_data -= length + 1;
+	if( hash->info.used_key_data & 0x8000 )DebugBreak();
+
+}
+
 // this results in an absolute disk position
 // pass the hash_lookup_block which is gaining a new key value.
 // pass the key and key length (offset in bytes as nessecary)
 // dropHash will drop the least significant HASH_MASK_BITS bits from
 // the least significant byte.  (leaving the remaining bits)
 
-static FPI saveKeyData( struct flower_hash_lookup_block *hash, const char *key, size_t keylen ) {
+static FPI saveKeyData( struct flower_hash_lookup_block *hash, const char *key, uint8_t keylen ) {
+	if( keylen > 8 ) DebugBreak();
 	uint8_t * this_name_block = hash->key_data_first_block;
 	uint8_t * start = this_name_block;
 	size_t max_key_data = hash->info.key_data_blocks * KEY_BLOCK_SIZE;
+	if( keylen & 0xFFFFF00 ) DebugBreak();
 	//int keydatalen;
+	//printf( "Save key..." );
+	//LogBinary( key, keylen );
 	while( 1 ) {
+		if( hash->info.used_key_data > 4096 ) DebugBreak();
 		this_name_block += hash->info.used_key_data;
 		/* // scan strings, doesn't require an extra length counter
 		keydatalen = this_name_block[0];
@@ -101,15 +137,16 @@ static FPI saveKeyData( struct flower_hash_lookup_block *hash, const char *key, 
 	}
 }
 
+
 // returns pointer to user data value
-void lookupFlowerHashKey( struct flower_hash_lookup_block **root, uint8_t const *key, size_t keylen, uintptr_t **userdata ) {
+void lookupFlowerHashKey( struct flower_hash_lookup_block **root, uint8_t const *key, size_t keylen, uintptr_t **userdata, int*pei, int*pem ) {
 	if( !key ) {
 		userdata[0] = NULL;
 		return; // only look for things, not nothing.
 	}
 	int ofs = 0;
 
-	struct flower_hash_lookup_block *hash = root;
+	struct flower_hash_lookup_block *hash = root[0];
 	struct key_data_entry *next_entries;
 
 	// provide 'goto top' by 'continue'; otherwise returns.
@@ -137,6 +174,8 @@ void lookupFlowerHashKey( struct flower_hash_lookup_block **root, uint8_t const 
 			curName &= ~( curMask >> 1 );
 			// sort first by key length... (really only compare same-length keys)
 			if( ( d == 0 ) && ( d = memcmp( key + ofs, keyBlock + entkey, keylen ) ) == 0 ) {
+				if( pei ) pei[0] = curName;
+				if( pem ) pem[0] = curMask;
 				userdata[0] = &entry->stored_data;
 				root[0] = hash;
 				return;
@@ -161,7 +200,7 @@ void lookupFlowerHashKey( struct flower_hash_lookup_block **root, uint8_t const 
 
 uintptr_t* FlowerHashShallowLookup( struct flower_hash_lookup_block* root, uint8_t const* key, size_t keylen ) {
 	uintptr_t* t;
-	lookupFlowerHashKey( &root, key, keylen, &t );
+	lookupFlowerHashKey( &root, key, keylen, &t, NULL, NULL );
 	return  t;
 }
 
@@ -173,31 +212,39 @@ struct flower_hash_lookup_block *InitFlowerHash( enum insertFlowerHashEntryOptio
 	hash->info.dense = (options & IFHEO_DENSE)?1:0;
 	hash->info.convertible = (options & IFHEO_CONVERTIBLE)?1:0;
 	hash->info.immutable = (options & IFHEO_IMMUTABLE)?1:0;
+	hash->info.no_dup = ( options & IFHEO_NO_DUPLICATES ) ? 1 : 0;
 	// zero means, track as index number...
+	hash->entries = hash->entries_;
 	hash->info.userRecordSize = 0;// sizeof( struct key_data_entry );
 	return hash;
 }
 
 struct flower_hash_lookup_block* CreateFlowerHashMap( enum insertFlowerHashEntryOptions options, void* userDataBuffer, size_t userRecordSize, int maxRecords ) {
+	if( userRecordSize > ( (unsigned)( ( (int)-1 ) ) ) ) {
+		printf( "Record size to allocate is larger than can be tracked: %zd", userRecordSize ); 
+		return NULL;
+	}
 	struct flower_hash_lookup_block* hash = NewPlus( struct flower_hash_lookup_block, sizeof( struct key_data_entry ) * KEY_DATA_ENTRIES );
 	memset( hash, 0, sizeof( *hash ) );
 	expand_key_data_space( hash );
 	hash->entries = userDataBuffer;
-	hash->info.userRecordSize = userRecordSize;
+	hash->info.userRecordSize = (int)userRecordSize;
 	hash->key_data_first_block[0] = 0;
 	hash->info.dense = ( options & IFHEO_DENSE ) ? 1 : 0;
 	hash->info.convertible = ( options & IFHEO_CONVERTIBLE ) ? 1 : 0;
 	hash->info.immutable = ( options & IFHEO_IMMUTABLE ) ? 1 : 0;
+	hash->info.no_dup = ( options & IFHEO_NO_DUPLICATES ) ? 1 : 0;
 	return hash;
-
 }
 
 
 static void updateEmptiness( struct flower_hash_lookup_block* hash, int entryIndex, int entryMask ) {
-	while( ( entryMask < KEY_DATA_ENTRIES / 2 ) && ( ( entryIndex > KEY_DATA_ENTRIES ) || TESTFLAG( hash->used_key_data, entryIndex >> 1 ) ) ) {
-		if( entryIndex < KEY_DATA_ENTRIES )
+	while( ( entryMask < KEY_DATA_ENTRIES ) && ( ( entryIndex > KEY_DATA_ENTRIES ) || TESTFLAG( hash->used_key_data, entryIndex >> 1 ) ) ) {
+		if( entryIndex < KEY_DATA_ENTRIES && ( entryIndex & 1 ) ) {
 			RESETFLAG( hash->used_key_data, entryIndex >> 1 );
-		entryIndex &= ~( entryMask << 1 ) | entryMask;
+			//dumpBlock( hash );
+		}
+		entryIndex = entryIndex & ~( entryMask << 1 ) | entryMask;
 		entryMask <<= 1;
 	}
 }
@@ -212,28 +259,25 @@ static void updateFullness( struct flower_hash_lookup_block* hash, int entryInde
 			if( pIndex < KEY_DATA_ENTRIES ) { // this is full automatically otherwise 
 				if( !TESTFLAG( hash->used_key_data, pIndex >> 1 ) ) {
 					SETFLAG( hash->used_key_data, pIndex >> 1 ); // set node full status.
-				} else {
+				} 
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+				else {
 					// this could just always be inserting into a place that IS full; and doesn't BECOME full...
 					printf( "Parent should NOT be full. (if it was, " );
 					DebugBreak();
 					break; // parent is already full.
 				}
+#endif
 			}
 			else {
 
 				int tmpIndex = pIndex;
 				int tmpMask = entryMask;
 				while( tmpMask && ( tmpIndex = tmpIndex & ~tmpMask ) ) { // go to left child of this out of bounds parent..
-					if( tmpMask == 1 ) {
-						if( tmpIndex >= KEY_DATA_ENTRIES || hash->key_data_offset[tmpIndex] ) {
-							break;
-						}
+					if( tmpMask == 1 )  break;
+					
+					if( TESTFLAG( hash->used_key_data, tmpIndex >> 1 ) ) {
 						break;
-					}
-					else {
-						if( TESTFLAG( hash->used_key_data, tmpIndex >> 1 ) ) {
-							break;
-						}
 					}
 					tmpMask >>= 1;
 				}
@@ -278,6 +322,9 @@ static void updateFullness( struct flower_hash_lookup_block* hash, int entryInde
 }
 
 
+static void moveOneEntry_( struct flower_hash_lookup_block* hash, int from, int to, int update );
+#define moveOneEntry(a,b,c) moveOneEntry_(a,b,c,1)
+
 // Rotate Right.  (The right most node may need to bubble up...)
 // the only way this can end up more than max, is if the initial input
 // is larger than the size of the tree.
@@ -301,25 +348,17 @@ static void upRightSideTree( struct flower_hash_lookup_block* hash, int entryInd
 				else break;
 				// if node is empty... 
 				if( !hash->key_data_offset[parent] ) {
-					// move this to the parent, and empty old.
-					hash->entries[parent] = hash->entries[entryIndex];
-
-					// have to at least clear 'used'
-					//hash->key_data_offset[entryIndex] = 0;
-					memset( hash->entries + entryIndex, 0, sizeof( hash->entries[0] ) );
+					moveOneEntry( hash, entryIndex, parent );
+					hash->key_data_offset[entryIndex] = 0;
 					entryIndex = parent;
 					entryMask = parentMask;
 				}
 				else break;
-
 			}
 		}
 	}
 	else
-		if( !hash->key_data_offset[entryIndex] ) {
-			return;
-		}
-
+		if( !hash->key_data_offset[entryIndex] ) return;
 	int broIndex = entryIndex ^ ( entryMask << 1 );
 	if( entryMask == 1 
 		&& ( ( broIndex >= KEY_DATA_ENTRIES ) 
@@ -336,26 +375,21 @@ static void upLeftSideTree( struct flower_hash_lookup_block* hash, int entryInde
 			int parent = entryIndex;
 			int parentMask = entryMask;
 			if( ( parent & ( parentMask << 1 ) ) ) { // came from parent's right
-//				if( ( parent & ( parentMask << 2 ) ) ) {  
-					// came from the right side.
-					parent = parent & ~( parentMask << 1 ) | parentMask;
-					parentMask <<= 1;
-
-					//  check if value is empty, and swap
-					if( !hash->key_data_offset[parent] ) {
-						hash->entries[parent] = hash->entries[entryIndex];
-						memset( hash->entries + entryIndex, 0, sizeof( hash->entries[0] ) );
-						entryIndex = parent;
-						entryMask = parentMask;
-						continue;
-					}
-//				}
+				parent = parent & ~( parentMask << 1 ) | parentMask;
+				parentMask <<= 1;
+				//  check if value is empty, and swap
+				if( !hash->key_data_offset[parent] ) {
+					moveOneEntry( hash, entryIndex, parent );
+					hash->key_data_offset[entryIndex] = 0;
+					entryIndex = parent;
+					entryMask = parentMask;
+					continue;
+				}
 			}
 			break;
 		}
 	}
 	int broIndex = entryIndex ^ ( entryMask << 1 );
-	
 	if( entryMask == 1 && ( ( broIndex >= KEY_DATA_ENTRIES )
 		|| hash->key_data_offset[broIndex] ) ) { // if other leaf is also used
 		updateFullness( hash, entryIndex, entryMask );
@@ -364,7 +398,11 @@ static void upLeftSideTree( struct flower_hash_lookup_block* hash, int entryInde
 
 static int getLevel( int N ) {
 #ifdef __GNUC__
-	int n = __builtin_ffs( ~N );
+	int n = __builtin_ffs( ~N )-1;
+#elif defined( _MSC_VER )
+	unsigned long n;
+	_BitScanForward( &n, ~N ); 
+	return (int)(n);
 #else
 	int n;
 	for( n = 0; n < 32; n++ ) if( !(N&(1<<n)) ) break;
@@ -372,14 +410,172 @@ static int getLevel( int N ) {
 	return n;	
 }
 
+
+static void validateBlock( struct flower_hash_lookup_block* hash ) {
+	return;
+	int used = hash->info.used;
+	int realUsed = 0;
+	FPI prior = 0;
+	uint8_t *keyData = hash->key_data_first_block;
+	int n;
+	int m;
+	for( n = 0; n < KEY_DATA_ENTRIES; n++ ) {
+		for( m = n+1; m < KEY_DATA_ENTRIES; m++ ) {
+			if( hash->key_data_offset[n] && hash->key_data_offset[m] ) {
+				if( hash->key_data_offset[n] == hash->key_data_offset[m] ) {
+					printf( "Duplicate key in %d and %d", n, m );
+					DebugBreak();
+				}
+			}
+		}
+	}
+
+	for( n = 0; n < KEY_DATA_ENTRIES; n++ ) {
+		if( hash->key_data_offset[n] ) {
+			int nLevel = 1 << getLevel( n );
+			if( hash->key_data_offset[n] > hash->info.used_key_data )DebugBreak();
+			if( ((n & ~( nLevel << 1 ) | nLevel) < KEY_DATA_ENTRIES )&&  !hash->key_data_offset[n & ~( nLevel << 1 ) | nLevel] ) {
+				printf( "Parent should always be filled:%d\n", n );
+				DebugBreak();
+			}
+			if( prior ) {
+				if( keyData[prior - 1] > keyData[hash->key_data_offset[n] - 1] ) {
+					DebugBreak();
+				}
+				if( memcmp( keyData + prior, keyData + hash->key_data_offset[n], keyData[hash->key_data_offset[n] - 1] ) > 0 ) {
+					printf( "Entry Out of order:%d\n", n );
+					DebugBreak();
+				}
+			}
+			prior = hash->key_data_offset[n];
+			realUsed++;
+		}
+	}
+	if( realUsed!=used && realUsed != ( used + 1 ) && realUsed != (used-1) )
+		DebugBreak();
+	hash->info.used = realUsed;
+}
+
+
+static void moveOneEntry_( struct flower_hash_lookup_block* hash, int from, int to, int update ) {
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+	if( to >= KEY_DATA_ENTRIES ) DebugBreak();
+#endif
+#ifdef FLOWER_HASH_DEBUG_MOVES
+	printf( "MoveEntry %d %d 1\n", from, to );
+#endif
+#ifdef FLOWER_TICK_PERF_COUNTERS
+	if( to < from ) {
+		pft.lenMovedLeft[1]++;
+		pft.moves_left++;
+	}
+	else {
+		pft.lenMovedRight[1]++;
+		pft.moves_right++;
+	}
+#endif
+	if( to < 0 ) DebugBreak();
+	hash->key_data_offset[to] = hash->key_data_offset[from];
+	hash->entries[to] = hash->entries[from];
+	if( update )
+		if( to < from ) {
+			upLeftSideTree( hash, to, 1 << getLevel( to ) );
+		}
+		else {
+			upRightSideTree( hash, to, 1 << getLevel( to ) );
+		}
+}
+
+static void moveTwoEntries_( struct flower_hash_lookup_block* hash, int from, int to, int update ) {
+#define moveTwoEntries(a,b,c) moveTwoEntries_(a,b,c,1)
+	int const to_ = to;
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+	if( to >= KEY_DATA_ENTRIES ) DebugBreak();
+#endif
+#ifdef FLOWER_HASH_DEBUG_MOVES
+	printf( "MoveEntries %d %d 2\n", from, to );
+#endif
+#ifdef FLOWER_TICK_PERF_COUNTERS
+	if( to < from ) {
+		pft.lenMovedLeft[2]++;
+		pft.moves_left++;
+	}
+	else {
+		pft.lenMovedRight[2]++;
+		pft.moves_right++;
+	}
+#endif
+	if( to < 0 ) DebugBreak();
+	if( from > to ) {
+		hash->key_data_offset[to] = hash->key_data_offset[from];
+		hash->entries[to++] = hash->entries[from++];
+		hash->key_data_offset[to] = hash->key_data_offset[from];
+		hash->entries[to] = hash->entries[from];
+	}
+	else {
+		hash->key_data_offset[++to] = hash->key_data_offset[++from];
+		hash->entries[to--] = hash->entries[from--];
+		hash->key_data_offset[to] = hash->key_data_offset[from];
+		hash->entries[to] = hash->entries[from];
+	}
+	if( update )
+		if( to < from ) {
+			upLeftSideTree( hash, to_, 1 << getLevel( to_ ) );
+		}
+		else {
+			upRightSideTree( hash, to_+1, 1 << getLevel( to_+1 ) );
+		}
+}
+
+static void moveEntrySpan( struct flower_hash_lookup_block* hash, int from, int to, int count ) {
+	int const to_ = to;
+	int const count_ = count;
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+	if( to >= KEY_DATA_ENTRIES || ( to + count ) >= KEY_DATA_ENTRIES ) DebugBreak();
+#endif
+#ifdef FLOWER_HASH_DEBUG_MOVES
+	printf( "MoveEntrySpan %d %d %d\n", from, to, count );
+#endif
+#ifdef FLOWER_TICK_PERF_COUNTERS
+	if( to < from ) {
+		pft.lenMovedLeft[count]++;
+		pft.moves_left++;
+	}
+	else {
+		pft.lenMovedRight[count]++;
+		pft.moves_right++;
+	}
+#endif
+	if( to < 0 ) DebugBreak();
+	if( from > to ) {
+		//for( ; count > 1; count -= 2, from += 2, to += 2 ) moveTwoEntries_( hash, from, to, 0 );
+		//for( ; count > 0; count-- ) moveOneEntry_( hash, from++, to++, 0 );
+		memmove( hash->entries + to, hash->entries + from, ( count ) * sizeof( hash->entries[0] ) );
+		memmove( hash->key_data_offset + to, hash->key_data_offset + from, ( count ) * sizeof( hash->key_data_offset[0] ) );
+	}
+	else {
+		memmove( hash->entries + to, hash->entries + from, ( count ) * sizeof( hash->entries[0] ) );
+		memmove( hash->key_data_offset + to, hash->key_data_offset + from, ( count ) * sizeof( hash->key_data_offset[0] ) );
+		//for( from += count, to += count; count > 0; count-- ) moveOneEntry_( hash, --from, --to, 0 );
+	}
+	if( to < from ) {
+		upLeftSideTree( hash, to_, 1 << getLevel( to_ ) );
+	}
+	else {
+		upRightSideTree( hash, to_+ count_ -1, 1 << getLevel( to_ + count_ - 1 ) );
+	}
+}
+
+static int c;
+
 static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 	, uint8_t const* key
-	, int keylen
+	, size_t keylen
 	, uintptr_t** userPointer
 	, enum insertFlowerHashEntryOptions  opt_immutable
 ) {
+	if( keylen > 255 ) { printf( "Key is too long to store.\n" ); userPointer[0] = NULL; return; }
 	struct flower_hash_lookup_block* hash = hash_[0];
-	int level = 1;
 	int entryIndex = treeEnt( 0, 0, KEY_DATA_ENTRIES_BITS );
 	int entryMask = 1 << getLevel( entryIndex ); // index of my zero.
 	int edge = -1;
@@ -396,44 +592,76 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 
 	full = TESTFLAG( hash->used_key_data, entryIndex >> 1 ) != 0;
 	{
-		static int c;
 		c++;
 #ifdef HASH_DEBUG_BLOCK_DUMP_INCLUDED
-		//if( c > 3454100 )
-	//		dump = 1;
+		if( ( c > ( 1185294400 ) ) )
+			dump = 1;
 #endif
 		//if( c == 236 ) DebugBreak();
 	}
 	if( !hash->info.dense ) {
 		struct flower_hash_lookup_block* next;
 		// not... dense
+		if( hash->parent && full )
+			DebugBreak();
 		do {
-			if( hash->info.convertible || hash->info.dense ) {
-				if( full )
-					convertFlowerHashBlock( hash );
+			if( full && ( hash->info.convertible || hash->info.dense ) ) {
+				convertFlowerHashBlock( hash );
+				full = TESTFLAG( hash->used_key_data, entryIndex >> 1 ) != 0;
 			}
-
-			next = hash->next_block[key[0] & HASH_MASK];
-			if( hash->parent ) {
-				key++; keylen--;
-			}
-			if( next )
+			if( next = hash->next_block[key[0] & HASH_MASK] ) {
+				if( hash->parent ) {
+					key++; keylen--;
+				}
 				hash = next;
+				full = TESTFLAG( hash->used_key_data, entryIndex >> 1 ) != 0;
+			}
 		} while( next );
 	}
+
+#if 0
+	// this can catch the tree in a certain (unique?) state... (copy row of dumped 'USED' bits)
+	{
+		char tests[][KEY_DATA_ENTRIES] = {
+			"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000010000000000000000000000000000000100000001000000010000000000000001000000010001111100010101000100010000000100000001000100011101000100000001000000010000000000000001000000000000000100000001111111011111110100010101111111",
+			  //"00000000000000000000000000000001000000000000000000000000000000010000000000000000000000000000000100000000000000010000000000000001000000000000000000000000000000010000000000000000000000000000000100000000000000000000000000000001000000000000000000000000000000010000000000000001000000010001000100000000000000010000000000000001111111110000000100000001000000111111111111111111111111110101",
+		};
+		int b;  // bit
+		int t = 0; // test
+		for( t = 0; t < sizeof( tests ) / sizeof( tests[0] ); t++ ) {
+			for( b = 0; b < KEY_DATA_ENTRIES; b++ ) {
+				if( tests[t][b] ) {
+					if( tests[t][b] == '1' ) { if( !hash->key_data_offset[b] )break; }
+					else if( tests[t][b] == '0' ) { if( hash->key_data_offset[b] )break; }
+				}
+			}
+			if( b == KEY_DATA_ENTRIES ) {
+				DebugBreak();
+				break;
+			}
+		}
+	}
+#endif
+
 	while( 1 ) {
 		int d_ = 1;
 		int d = 1;
 		while( 1 ) {
 
-			int offset;
+			int offset = 0;
 			// if entry is in use....
 			if( mustLeftEnt || ( offset = hash->key_data_offset[entryIndex] ) ) {
 				// compare the keys.
-				if( d ) {
-					d = mustLeftEnt ? -1 : (int)( keylen - hash->key_data_first_block[offset - 1] );
+				if( d && offset ) {
+					// mustLeftEnt ? -1 : 
+					d = (int)( keylen - hash->key_data_first_block[offset - 1] );
 					if( d == 0 ) {
 						d = memcmp( key, hash->key_data_first_block + offset, keylen );
+						if( hash->info.no_dup && d == 0 ) {
+							// duplicate already found in tree, use existing entry.
+							hash_[0] = hash;
+							return;
+						}
 						// not at a leaf...
 					}
 				}
@@ -444,17 +672,15 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 							edgeMask = entryMask;
 							// already full... definitly will need a peer.
 							edge = entryIndex ^ ( entryMask << 1 );
-							int b;
 							if( edge > KEY_DATA_ENTRIES ) {
-
+								int backLevels;
 								// 1) immediately this edge is off the chart; this means the right side is also full (and all the dangling children)
-
-								for( b = 0; ( edge > KEY_DATA_ENTRIES ) && b < 8; b++ ) {
+								for( backLevels = 0; ( edge > KEY_DATA_ENTRIES ) && backLevels < 8; backLevels++ ) {
 									edge = ( edge & ~( edgeMask << 1 ) ) | ( edgeMask );
 									edgeMask <<= 1;
 								}
 
-								for( b = b; b > 0; b-- ) {
+								for( backLevels = backLevels; backLevels > 0; backLevels-- ) {
 									int next = edge & ~( edgeMask >> 1 );
 									if( ( ( next | ( edgeMask ) ) < KEY_DATA_ENTRIES ) ) {
 										if( !TESTFLAG( hash->used_key_data, ( next | ( edgeMask ) ) >> 1 ) ) {
@@ -494,10 +720,12 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 										if( !mustLeft ) next |= entryMask; else mustLeft = 0;
 										if( next >= KEY_DATA_ENTRIES )
 											mustLeft = 1;
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
 										if( TESTFLAG( hash->used_key_data, next >> 1 ) ) {
 											printf( "The parent of this node should already be marked full.\n" );
 											DebugBreak();
 										}
+#endif
 									}
 									else {
 										if( (!( next & 1 )) && hash->key_data_offset[next] ) {
@@ -517,10 +745,12 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 										}
 										else {
 											if( TESTFLAG( hash->used_key_data, ( next | entryMask ) >> 1 ) ) {
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
 												if( TESTFLAG( hash->used_key_data, next >> 1 ) ) {
 													printf( "The parent of this node should already be marked full.\n" );
 													DebugBreak();
 												}
+#endif
 											}
 											else {
 												if( entryMask != 2 || !hash->key_data_offset[next | entryMask] ) {
@@ -531,12 +761,14 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 											}
 										}
 									} 
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
 									else {
 										if( TESTFLAG( hash->used_key_data, next >> 1 ) ) {
 											printf( "The parent of this node should already be marked full.\n" );
 											DebugBreak();
 										}
 									}
+#endif
 								}
 
 							edge = next;
@@ -544,12 +776,18 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 							//printf( "Edge follow: %d %s %d  %s\n", edge, toBinary( edge ), entryIndex, toBinary( entryIndex ) );
 						}
 					if( d_ ) {
-						entryIndex &= ~( entryMask >> 1 );
-						if( d > 0 ) entryIndex |= entryMask;
-						if( entryIndex >= KEY_DATA_ENTRIES ) mustLeftEnt = 1; else mustLeftEnt = 0;
+						if( d ) {
+							entryIndex &= ~( entryMask >> 1 );
+							if( !mustLeftEnt && d > 0 ) entryIndex |= entryMask;
+							if( entryIndex >= KEY_DATA_ENTRIES ) mustLeftEnt = 1; else mustLeftEnt = 0;
+						}
 					}
-					else break;
-					d_ = d;
+					else {
+
+						//break;
+					}
+					if(! hash->key_data_offset[entryIndex] )
+						d_ = d;
 					entryMask >>= 1;
 					if( edge >= 0 && !hash->key_data_offset[edge] )
 						if( edge > entryIndex )
@@ -567,6 +805,20 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 					continue;
 				}
 
+				if( mustLeftEnt && entryIndex >= KEY_DATA_ENTRIES ) {
+					entryIndex &= ~2;
+					if( entryIndex < (KEY_DATA_ENTRIES-1) ) {
+						if( d > 0 ) {
+							if( edge < 0 ) {
+								edge = entryIndex;
+								edgeMask = entryMask;
+							}
+							entryIndex++;
+							entryMask <<= 1;
+						}
+					}
+					mustLeftEnt = 0;
+				}
 				// this key needs to go here.
 				// the value that IS here... d < 0 is needs to move left
 				// if the d > 0 , then this value needs to move to the right.
@@ -574,31 +826,19 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 				if( hash->info.immutable ) // if entries may not move, stop here, and store in hash.
 					break;
 				if( !full ) {
-#if 0
-					// this can catch the tree in a certain (unique?) state... (copy row of dumped 'USED' bits)
-					{
-						char tests[][KEY_DATA_ENTRIES] = { 
-							  "00000001000000010000000101010101000000000000000100000000000000011111111111111111000100011111010100000000000000000000000000000001111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111101010011110100010000000000000001000101010000000100000000000000010000000000000001000000000000000100000001000101111111111111111111111111111111",
-							  //"00000000000000000000000000000001000000000000000000000000000000010000000000000000000000000000000100000000000000010000000000000001000000000000000000000000000000010000000000000000000000000000000100000000000000000000000000000001000000000000000000000000000000010000000000000001000000010001000100000000000000010000000000000001111111110000000100000001000000111111111111111111111111110101",
-						};
-						int b;
-						int t = 0;
-						for( t = 0; t < sizeof( tests ) / sizeof(tests[0]); t++ )
-							for( b = 0; b < KEY_DATA_ENTRIES; b++ ) {
-								if( tests[t][b] ) {
-									if( tests[t][b] == '1' ) { if( !hash->key_data_offset[b] )break; }
-									else if( tests[t][b] == '0' ) { if( hash->key_data_offset[b] )break; }
-								}
-							}
-						if( b == KEY_DATA_ENTRIES )DebugBreak();
-					}
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+					if( edge >= (int)KEY_DATA_ENTRIES ) DebugBreak();
 #endif
+					//------------ 
+					//  This huge block Shuffles the data in the array to the left or right 1 space
+					//  to allow inserting the entryIndex in it's currently set spot.
 					if( edge < entryIndex ) {
 						if( edge == -1 ) {
 							// collided on a leaf, but leaves to the left or right are available.
 							// so definatly my other leaf is free, just rotate through the parent.
 							int side = entryIndex & ( entryMask << 1 );
 							int next = entryIndex;
+							int nextToRight = 0;
 							int p = entryIndex;
 							int pMask = entryMask;
 							while( pMask < ( KEY_DATA_ENTRIES / 2 ) ) {
@@ -611,60 +851,79 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 							}
 
 							int nextMask;
-							while( ( next >= 0 ) && hash->key_data_offset[next - 1] ) next--;
-							if( next > 0 ){
-								nextMask = 1 << getLevel( next );
-							} else {
-								next = entryIndex;
-								while( ( next < KEY_DATA_ENTRIES ) && hash->key_data_offset[next + 1] ) next++;
-								if( next == KEY_DATA_ENTRIES ) {
-									printf( "The tree is full to the left, full to the right, why isn't the root already full??" );
-									DebugBreak();
-								}
-								else {
+							if( hash->key_data_offset[entryIndex] ) {
+								while( ( next >= 0 ) && hash->key_data_offset[next - 1] ) next--;
+								if( next > 0 ) {
+									nextToRight = 0;
 									nextMask = 1 << getLevel( next );
 								}
-							}
+								else {
+									next = entryIndex;
+									while( ( next < KEY_DATA_ENTRIES ) && hash->key_data_offset[next + 1] ) next++;
+									if( next == KEY_DATA_ENTRIES ) {
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+										printf( "The tree is full to the left, full to the right, why isn't the root already full??" );
+										DebugBreak();
+#endif
+									}
+									else {
+										nextToRight = 1;
+										nextMask = 1 << getLevel( next );
+									}
+								}
 
-							{
 								if( side ) {
 									// I'm the greater of my parent.
 									if( d > 0 ) {
-										pft.lenMovedLeft[2]++;
-										pft.moves_left++;
 										//printf( "01 Move %d to %d for %d\n", next - 0, next - 1, ( 1 + ( entryIndex - next ) ) );
 										if( next < entryIndex ) {
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
 											if( next <= 0 )DebugBreak();
-											memmove( hash->entries + next - 1, hash->entries + next - 0, ( 1 + ( entryIndex - next ) ) * sizeof( *hash->entries ) );
+#endif
+											moveEntrySpan( hash, next, next - 1, 1+(entryIndex-next) );
 											next = next - 1;
 											nextMask = 1 << getLevel( next );
 										} else {
-
-											memmove( hash->entries + entryIndex + 1, hash->entries + entryIndex + 0, ( 1 + ( next - entryIndex ) ) * sizeof( *hash->entries ) );
+											moveEntrySpan( hash, entryIndex, entryIndex+1, 1 + ( next - entryIndex ) );
 											entryIndex = entryIndex + 1;
 											entryMask = 1 << getLevel( next );
 										}
 									}
 									else {
-										pft.lenMovedLeft[1]++;
-										pft.moves_left++;
 										//printf( "02 Move %d to %d for %d\n", next - 1, next - 2, ( 1 + ( entryIndex - next ) ) );
 										if( next <= 1 ) {
-											memmove( hash->entries + next - 1, hash->entries + next, ( ( entryIndex - next ) ) * sizeof( *hash->entries ) );
-											entryIndex--;
-											entryMask = 1 << getLevel( next );
-											next = 0;
-											nextMask = 1;
-											//DebugBreak();
+											if( entryIndex > next ) {
+												moveEntrySpan( hash, next, next - 1, 1+( entryIndex - next ) );
+												entryIndex--;
+												entryMask = 1 << getLevel( next );
+												next = 0;
+												nextMask = 1;
+												//DebugBreak();
+											}
+											else {
+												moveEntrySpan( hash, next, next - 1, ( next - entryIndex ) );
+												entryIndex--;
+												entryMask = 1 << getLevel( next );
+												next = 0;
+												nextMask = 1;
+												//DebugBreak();
+											}
 										}
 										else {
-											if( next > entryIndex ) {
-												memmove( hash->entries + entryIndex + 1, hash->entries + entryIndex, ( 1 + ( next - entryIndex ) ) * sizeof( *hash->entries ) );;
+											if( nextToRight ) {
+												moveEntrySpan( hash, entryIndex, entryIndex + 1, 1+( next - entryIndex ) );
 												next = next++;
 												nextMask = 1 << getLevel( next );
 											}
 											else {
-												memmove( hash->entries + next - 1, hash->entries + next, ( 1 + ( entryIndex - next ) ) * sizeof( *hash->entries ) );;
+												if( entryIndex - next ) {
+													moveEntrySpan( hash, next, next - 1, ( entryIndex - next ) );
+													entryIndex--;
+													entryMask = 1 << getLevel( entryIndex );
+												}
+												else {
+													moveOneEntry( hash, next, next - 1 );
+												}
 												next = next - 1;
 												nextMask = 1 << getLevel( next );
 											}
@@ -674,75 +933,65 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 								else {
 									// I'm the lesser of my parent...
 									if( d < 0 ) {
-										pft.lenMovedRight[2]++;
-										pft.moves_right++;
 										//printf( "03 Move %d to %d for %d  %d\n", entryIndex + 1, entryIndex,  2 , ( entryIndex - next )  );
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
 										if( entryIndex <= -1 )DebugBreak();
+#endif
 										if( entryIndex >= ( KEY_DATA_ENTRIES - 1 ) ) {
-											memmove( hash->entries + next -1, hash->entries + next, 1 * sizeof( *hash->entries ) );;
+											moveOneEntry( hash, next, next - 1 );
 											next = next - 1;
 											nextMask = 1 << getLevel( next );
 											entryIndex--;
 											entryMask = 1 << getLevel( entryIndex );
-										}
-										else {
+										} else {
 											if( entryIndex < next ) {
-												memmove( hash->entries + entryIndex + 1, hash->entries + entryIndex + 0, 2 * sizeof( *hash->entries ) );;
+												moveEntrySpan( hash, entryIndex, entryIndex + 1, 1+(next-entryIndex) );
 												next = entryIndex + 2;
 												nextMask = 1 << getLevel( next );
 											} else {
-												memmove( hash->entries + next - 1, hash->entries + next, 2 * sizeof( *hash->entries ) );;
+												moveEntrySpan( hash, next, next - 1, ( entryIndex - next ) );
 												next--;
 												nextMask = 1 << getLevel( next );
+												entryIndex--;
+												entryMask = 1 << getLevel( entryIndex );
 											}
 										}
 									}
 									else {
-										pft.lenMovedLeft[1]++;
-										pft.moves_right++;
 										//printf( "04 Move %d to %d for %d  %d\n", entryIndex+1, entryIndex+2,  1 , ( entryIndex - next ) );
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
 										if( entryIndex <= -2 )DebugBreak();
-										if( entryIndex >= 235 ) {
-											memmove( hash->entries + next-1, hash->entries + next, 2 * sizeof( *hash->entries ) );;
+#endif
+										if( entryIndex >= (KEY_DATA_ENTRIES-1)) {
+											moveTwoEntries( hash, next, next-1 );
 											next--;
 											nextMask = 1 << getLevel( next );
-										}
-										else {
-											memmove( hash->entries + entryIndex + 2, hash->entries + entryIndex + 1, 1 * sizeof( *hash->entries ) );;
-											next = entryIndex + 2;
-											nextMask = 1 << getLevel( next );
-											entryIndex++;
-											if( entryIndex >= KEY_DATA_ENTRIES )
-												DebugBreak();
-											entryMask = 1 << getLevel( entryIndex );
+										} else {
+											if( next > entryIndex ) {
+												moveOneEntry( hash, entryIndex+1, entryIndex+2 );
+												next = entryIndex + 2;
+												nextMask = 1 << getLevel( next );
+												entryIndex++;
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+												if( entryIndex >= KEY_DATA_ENTRIES )
+													DebugBreak();
+#endif
+												entryMask = 1 << getLevel( entryIndex );
+											}else{
+												if( nextToRight ) {
+													moveOneEntry( hash, next, next + 1 );
+													next++;
+													nextMask = 1 << getLevel( next );
+												}
+												else {
+													moveEntrySpan( hash, next, next - 1, 1+(entryIndex - next) );
+													next--;
+													nextMask = 1 << getLevel( next );
+												}
+											}
 										}
 									}
 								}
-							}
-
-							if( next != entryIndex
-								&& !(next&1)
-								&& ( hash->key_data_offset[next ^ 2] )
-								&& !TESTFLAG( hash->used_key_data, next>>1) ) { // if other leaf is also used
-								updateFullness( hash, next, nextMask );
-							} else if( ( ( entryIndex ^ ( entryMask ) ) >= KEY_DATA_ENTRIES ) ) {
-								int cEntry = entryIndex ^ ( entryMask );
-								int cMask = entryMask>>1;
-								while( cMask > 1 ) {
-									cEntry = cEntry & ~( cMask >>1 );
-									if( cEntry < KEY_DATA_ENTRIES ) {
-										if( TESTFLAG( hash->used_key_data, entryIndex >> 1 ) ) { // if other leaf is also used
-											updateFullness( hash, entryIndex, entryMask );
-										}
-										break;
-									}
-									cMask >>= 1;
-								}
-							} else if( !(entryIndex&1) 
-								&& ( entryIndex ^ ( entryMask << 1 ) ) < KEY_DATA_ENTRIES
-								&& ( hash->key_data_offset[entryIndex ^ ( entryMask << 1 )] ) 
-								&& !TESTFLAG( hash->used_key_data, entryIndex >> 1 ) ) { // if other leaf is also used
-								updateFullness( hash, entryIndex, entryMask );
 							}
 						}
 						else {
@@ -753,13 +1002,11 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 							//printf( "A Move %d to %d for %d  d:%d\n", edge + 1, edge, entryIndex - edge, d );
 							if( d < 0 )
 								entryIndex--;
-							pft.lenMovedLeft[( entryIndex - edge ) >> 1]++;
-							pft.moves_left++;
 
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
 							if( edge < 0 )DebugBreak();
-							memmove( hash->entries + edge, hash->entries + edge + 1, ( entryIndex - edge ) * sizeof( *hash->entries ) );
-							// this may update fullness...
-							upLeftSideTree( hash, edge, edgeMask );
+#endif
+							moveEntrySpan( hash, edge+1, edge, entryIndex-edge );
 						}
 					}
 					else {
@@ -776,32 +1023,40 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 									edgeMask = leastMask;
 								}
 							}
-						if( d > 0 ) {
-							entryIndex++;
-							if( entryIndex >= KEY_DATA_ENTRIES )
-								DebugBreak();
+							if( d > 0 ) {
+								entryIndex++;
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+								if( entryIndex >= KEY_DATA_ENTRIES )
+									DebugBreak();
+#endif
 
-						}
-						pft.lenMovedLeft[( edge - entryIndex ) >> 1]++;
-						pft.moves_left++;
-						if( entryIndex <= -1 )DebugBreak();
-						memmove( hash->entries + entryIndex + 1, hash->entries + entryIndex, ( edge - entryIndex ) * sizeof( *hash->entries ) );
-						// this may update fullness...
-						//entryIndex = 
-						upRightSideTree( hash, edge, edgeMask );
+							}
+							if( edge >= KEY_DATA_ENTRIES ) {
+
+							}
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+							if( entryIndex <= -1 )DebugBreak();
+#endif
+							moveEntrySpan( hash, entryIndex, entryIndex + 1, edge - entryIndex );
 					}
-					if( entryIndex >= KEY_DATA_ENTRIES )
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+					if( entryIndex >= KEY_DATA_ENTRIES ) {
 						DebugBreak();
+					}
+#endif
 					//printf( "A Store at %d %s\n", entryIndex, toBinary( entryIndex ) );
 					// this insert does not change the fullness of this node
-					hash->key_data_offset[entryIndex] = saveKeyData( hash, key, keylen );
+					hash->key_data_offset[entryIndex] = saveKeyData( hash, key, (uint8_t)keylen );
 #ifdef FLOWER_HASH_ENABLE_LIVE_USER_DATA
 					hash->entries[entryIndex].user_data_ = userPointer;
 #endif
 					userPointer[0] = &hash->entries[entryIndex].stored_data;
 #ifdef HASH_DEBUG_BLOCK_DUMP_INCLUDED
-					if( dump  )
-					dumpBlock( hash );
+					if( dump )
+						dumpBlock( hash );
+					if( dump )
+						printf( "Added at %d\n", entryIndex );
+					validateBlock( hash );
 #endif
 					//return hash->entries + entryIndex;
 					hash_[0] = hash;
@@ -810,47 +1065,32 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 				break;
 			}
 			else {
-				// this entry is free, save here...
-				if( entryIndex >= KEY_DATA_ENTRIES )
-					DebugBreak();
-				hash->key_data_offset[entryIndex] = saveKeyData( hash, key, keylen );
-				//printf( "B Store at %d  %s\n", entryIndex, toBinary( entryIndex ) );
-				if( !( entryIndex & 1 ) ) { // filled a leaf.... 
-					if( ( entryMask == 1 && (entryIndex ^ 2) >= KEY_DATA_ENTRIES ) || hash->key_data_offset[entryIndex ^ ( entryMask << 1 )] ) { // if other leaf is also used
-						int broIndex;
-						int pIndex = entryIndex;
-						int pMask = entryMask;
-
-						do {
-							int pLevel;
-							pIndex = ( pIndex & ~( pLevel = pMask << 1 ) ) | pMask; // go to the parent
-							if( pIndex < KEY_DATA_ENTRIES ) {
-								if( !TESTFLAG( hash->used_key_data, pIndex >> 1 ) )
-									SETFLAG( hash->used_key_data, pIndex >> 1 ); // set node full status.
-								else {
-									printf( "Parent should NOT be full. (if it was, " );
-									DebugBreak();
-									break; // parent is already full.
-								}
-							}
-							broIndex = pIndex ^ ( pLevel<<1);
-							pMask <<= 1;
-							// and then while the parent's peer also 
-						} while( (broIndex>=KEY_DATA_ENTRIES) || ( hash->key_data_offset[broIndex] 
-							&& TESTFLAG( hash->used_key_data, broIndex >> 1 ) ) );
-					}
-				}
-#ifdef FLOWER_HASH_ENABLE_LIVE_USER_DATA
-				hash->entries[entryIndex].user_data_ = userPointer;
+			// this entry is free, save here...
+#ifdef FLOWER_DIAGNOSTIC_DEBUG
+			if( entryIndex >= KEY_DATA_ENTRIES )
+				DebugBreak();
 #endif
-				userPointer[0] = &hash->entries[entryIndex].stored_data;
+			hash->key_data_offset[entryIndex] = saveKeyData( hash, key, (uint8_t)keylen );
+			//printf( "B Store at %d  %s\n", entryIndex, toBinary( entryIndex ) );
+			if( !( entryIndex & 1 ) ) { // filled a leaf.... 
+				if( ( entryMask == 1 && ( entryIndex ^ 2 ) >= KEY_DATA_ENTRIES ) || hash->key_data_offset[entryIndex ^ ( entryMask << 1 )] ) { // if other leaf is also used
+					updateFullness( hash, entryIndex, entryMask );
+				}
+			}
+#ifdef FLOWER_HASH_ENABLE_LIVE_USER_DATA
+			hash->entries[entryIndex].user_data_ = userPointer;
+#endif
+			userPointer[0] = &hash->entries[entryIndex].stored_data;
 #ifdef HASH_DEBUG_BLOCK_DUMP_INCLUDED
-				if( dump )
+			if( dump )
 				dumpBlock( hash );
+			if( dump )
+				printf( "Added at %d\n", entryIndex );
+			validateBlock( hash );
 #endif
 				//return hash->entries + entryIndex;
-				hash_[0] = hash;
-				return;
+			hash_[0] = hash;
+			return;
 			}
 		}
 		if( hash->info.dense || hash->info.immutable ) {
@@ -860,8 +1100,11 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 					// making a new block...
 					next = convertFlowerHashBlock( hash );
 				else {
-					next = ( hash->next_block[key[0] & HASH_MASK] = InitFlowerHash(0) );
+					next = ( hash->next_block[key[0] & HASH_MASK] = InitFlowerHash( 0 ) );
 					next->info = hash->info;
+					next->info.used = 0;
+					next->info.used_key_data = 0;
+					//next->info.usedEntries = 0;
 				}
 				if( hash->parent ) {
 					key++;
@@ -875,45 +1118,115 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 	hash_[0] = hash;
 }
 
+// pull one of the nodes below me into this spot.
 static void bootstrap( struct flower_hash_lookup_block* hash, int entryIndex, int entryMask ) {
-	int c1 = entryIndex & ~( entryMask >> 1 );
-	entryMask >>= 1;
-	FPI n;
-	if( n = hash->key_data_offset[c1] ) {
-		hash->key_data_offset[entryIndex] = n;
-		hash->entries[entryIndex] = hash->entries[c1];
-		hash->key_data_offset[c1] = 0;
-		if( entryMask > 1 )
-			bootstrap( hash, c1, entryIndex, entryMask );
-	}
-	else if( n = hash->key_data_offset[c1|entryMask] ) {
-		hash->key_data_offset[entryIndex] = n;
-		hash->entries[entryIndex] = hash->entries[c1];
-		hash->key_data_offset[c1] = 0;
-		if( entryMask > 1 )
-			bootstrap( hash, c1, entryIndex, entryMask );
-	}
-	else {
-		updateEmptiness( hash, entryIndex, entryMask );
+	int c1, c2 = 0, c3;
+	int cMask;
+	if( entryMask > 1 ) {
+		if( entryIndex >= 0 ) {
+			c1 = -1;
+			if( !hash->key_data_offset[c2 = entryIndex - 1] ) {
+				for( cMask = entryMask >> 1, c2 = entryIndex & ( ~cMask ); cMask > 0; ) {
+					if( !hash->key_data_offset[c2] ) {
+						break;
+					}
+					c1 = c2;
+					cMask >>= 1;
+					c2 = c2 & ~( cMask ) | ( cMask << 1 );
+				}
+			}
+			else c1 = c2;
+		} else c1 = -1;
+		if( ( c2 || c1<0 ) && entryIndex <= KEY_DATA_ENTRIES ) {
+			if( !hash->key_data_offset[c3 = entryIndex + 1] ) {
+				c2 = KEY_DATA_ENTRIES;
+				for( cMask = entryMask>>1, c3 = entryIndex & ( ~cMask )|(cMask<<1); cMask > 0; ) {
+					if( !hash->key_data_offset[c3] ) {
+						break;
+					}
+					c2 = c3;
+					cMask >>= 1;
+					c3 = c3 & ( ~cMask );
+				}
+			}
+			else c2 = c3;
+		} else c2 = KEY_DATA_ENTRIES;;
+		if( c1 >= 0 && ( ( c2 >= KEY_DATA_ENTRIES ) || ( entryIndex - c1 ) < ( c2 - entryIndex ) ) ) {
+			moveOneEntry( hash, c1, entryIndex );
+			hash->key_data_offset[c1] = 0;
+			cMask = 1 << getLevel( c1 );
+			if( c1 & 1 )
+				bootstrap( hash, c1, cMask );
+			else
+				updateEmptiness( hash, c1 & ~( cMask << 1 ) | ( cMask ), cMask << 1 );
+		}
+		else if( ( ( c2 ) < KEY_DATA_ENTRIES ) && hash->key_data_offset[c2] ) {
+			moveOneEntry( hash, c2, entryIndex );
+			hash->key_data_offset[c2] = 0;
+			cMask = 1 << getLevel( c2 );
+			if( c2 & 1 )
+				bootstrap( hash, c2, cMask );
+			else
+				updateEmptiness( hash, c2 & ~( cMask <<1) | ( cMask ), cMask<<1 );
+		}else
+			hash->key_data_offset[entryIndex] = 0;
+	} else {
+		// just a leaf node, clear emptiness and be done.
+		updateEmptiness( hash, entryIndex, entryMask<<1 );
 	}
 }
 
 
 static void deleteFlowerHashEntry( struct flower_hash_lookup_block* hash, int entryIndex, int entryMask )
 {
-	uintptr_t* data;
-	hash->key_data_offset[entryIndex] = 0;
-	if( entryMask > 1 ) {
-		
-	}
+	//if( entryIndex == 373 )DebugBreak();
 	
+#if 0
+		// this can catch the tree in a certain (unique?) state... (copy row of dumped 'USED' bits)
+	{
+		char tests[][KEY_DATA_ENTRIES] = {
+			"11110001000101111101111111111111111111110111011111010001000100010101111111111111111100010101000111110001010111110101111111111111110101010001000100000001011101011111111111111111111111010001010100010101111111110101111111111111111111110000000100000001000101010101111111111111110100010001000111111111111100011111111111111111111111111111110101010001000111111111111111111111000000",
+		};
+		int b;  // bit
+		int t = 0; // test
+		for( t = 0; t < sizeof( tests ) / sizeof( tests[0] ); t++ ) {
+			for( b = 0; b < KEY_DATA_ENTRIES; b++ ) {
+				if( tests[t][b] ) {
+					if( tests[t][b] == '1' ) { if( !hash->key_data_offset[b] )break; }
+					else if( tests[t][b] == '0' ) { if( hash->key_data_offset[b] )break; }
+				}
+			}
+			if( b == KEY_DATA_ENTRIES ) {
+				DebugBreak();
+				break;
+			}
+		}
+	}
+#endif
+	if( entryMask > 1 ) {
+		squashKeyData( hash, entryIndex );
+		bootstrap( hash, entryIndex, entryMask );
+	}
+	else {
+		squashKeyData( hash, entryIndex );
+		hash->key_data_offset[entryIndex] = 0;
+		updateEmptiness( hash, entryIndex &~(entryMask<<1)|entryMask, entryMask<<1 );
+	}
+#ifdef HASH_DEBUG_BLOCK_DUMP_INCLUDED
+	//dumpBlock( hash );
+	validateBlock( hash );
+#endif
 }
 
 
-void DeleteFlowerHashEntry( struct flower_hash_lookup_block* hash, uint8_t const* key, int keylen )
+void DeleteFlowerHashEntry( struct flower_hash_lookup_block* hash, uint8_t const* key, size_t keylen )
 {
-	uintptr_t* data;
-
+	uintptr_t* t;
+	int entryIndex, entryMask;
+	lookupFlowerHashKey( &hash, key, keylen, &t, &entryIndex, &entryMask );
+	if( t ) {
+		deleteFlowerHashEntry( hash, entryIndex, entryMask );
+	}
 }
 
 
@@ -922,7 +1235,7 @@ struct flower_hash_lookup_block* convertFlowerHashBlock( struct flower_hash_look
 	FPI nameoffset_temp = 0;
 	struct flower_hash_lookup_block* new_dir_block;
 	
-	static int counters[HASH_MASK];
+	static int counters[HASH_MASK+1];
 	static uint8_t* namebuffer;
 	namebuffer = hash->key_data_first_block;
 	int maxc = 0;
@@ -946,14 +1259,17 @@ struct flower_hash_lookup_block* convertFlowerHashBlock( struct flower_hash_look
 			}
 		}
 	}
+	//printf( "--------------- Converting into hash:%d\n", imax );
 	// after finding most used first byte; get a new block, and point
 	// hash entry to that.
 	hash->next_block[imax]
 		= ( new_dir_block
 			= InitFlowerHash(0) );
 	new_dir_block->info = hash->info;
+	new_dir_block->info.used = 0;
+	new_dir_block->info.used_key_data = 0;
 
-
+	maxc = 0;
 	{
 		struct flower_hash_lookup_block* newHash;
 		uint8_t* newFirstNameBlock;
@@ -964,53 +1280,69 @@ struct flower_hash_lookup_block* convertFlowerHashBlock( struct flower_hash_look
 
 		newHash->parent = hash;
 		int b = 0;
-		for( f_ = 0; f_ < KEY_DATA_ENTRIES; f_++ ) {
+		for( f_ = 0; 1; f_++ ) {
 			int fMask;
-
+			fMask = 0;
 			for( ; b < KEY_DATA_ENTRIES_BITS; b++ ) {
 				if( f_ < ( fMask = ( ( 1 << ( b+1) ) - 1 ) ) )
 					break;
 			}
+			if( !fMask ) 
+				break;
 			f = treeEnt( f_ - ( ( fMask ) >> 1 ), b, KEY_DATA_ENTRIES_BITS );
-			if( f > KEY_DATA_ENTRIES ) continue;
+			if( f >= KEY_DATA_ENTRIES ) 
+				continue;
+			//printf( "test at %d  -> %d   %d  %d   %02x  ch:%02x\n", f_, f, b, f_ - ( ( fMask ) >> 1 ), fMask, hash->key_data_offset[f] );
 
-			FPI first = hash->key_data_offset[f];
-			struct key_data_entry* entry;
-			FPI name;
-			entry = hash->entries + ( f );
-			name = hash->key_data_offset[f];
-			if( ( namebuffer[name] & HASH_MASK ) == imax ) {
-				uintptr_t* ptr;
-				insertFlowerHashEntry( &newHash
-					                    , ((!hash->parent)?0:1)+namebuffer+name
-					                    , namebuffer[name-1]-((!hash->parent)?0:1)
-					                    , &ptr, 0 );
-				ptr[0] = entry->stored_data;
-				hash->key_data_offset[f] = 0;
-				int entryMask = 1 << getLevel(f);
-				updateEmptiness( hash, f, entryMask );
-				int from = name + namebuffer[name - 1];
-				int offset = namebuffer[name - 1] + 1;
-				memmove( namebuffer + name - 1, namebuffer + offset-1, memSize - from );
-				int g;
-				for( g = f + 1; g < KEY_DATA_ENTRIES; g++ ) {
-					if( hash->key_data_offset[g]  > name )
-						hash->key_data_offset[g] -= offset;
+
+			FPI const name = hash->key_data_offset[f];
+			if( name ) {
+				int newlen = namebuffer[name - 1] - ( ( !hash->parent ) ? 0 : 1 );
+				//printf( "Found %d  %02x = %02x at %d(%d)\n", name, namebuffer[name], namebuffer[name]&HASH_MASK, f, f_ );
+				if( newlen >= 0 ) {
+					if( ( namebuffer[name] & HASH_MASK ) == imax ) {
+						uintptr_t* ptr;
+						//lprintf( "MOVE %d %d %d", f, imax, namebuffer[name] );
+						//LogBinary( ( ( !hash->parent ) ? 0 : 1 ) + namebuffer + name, namebuffer[name - 1] - ( ( !hash->parent ) ? 0 : 1 ) );
+						insertFlowerHashEntry( &newHash
+							, ( ( !hash->parent ) ? 0 : 1 ) + namebuffer + name
+							, namebuffer[name - 1] - ( ( !hash->parent ) ? 0 : 1 )
+							, &ptr, 0 );
+						ptr[0] = hash->entries[f].stored_data;
+						deleteFlowerHashEntry( hash, f, 1 << getLevel( f ) );
+						maxc++;
+						f_--;  // retry this record... with new value in it.
+					}
+				}
+				else {
+					printf( "key has no data, must match in this block\n" );
 				}
 			}
 		}
+#if 0
+		// did we get rid of all the things expected to move?
+		if( counters[imax] - maxc ) DebugBreak();
+		memset( counters, 0, sizeof( counters ) );
+
+		for( f = 0; f < KEY_DATA_ENTRIES; f++ ) {
+			FPI name;
+			int count;
+			name = hash->key_data_offset[f];
+			if( name ) {
+				count = ( ++counters[namebuffer[name] & HASH_MASK] );
+			}
+		}
+		if( counters[imax] )DebugBreak();
+
+#endif
+//		validateBlock( hash );
 		return newHash;
 	}
-	// a set of names has been moved out of this block.
-	// has block.
-
-	// unlink here
-	// unlink hash->key_data_first_block
 }
 
 
 
-void AddFlowerHashEntry( struct flower_hash_lookup_block *hash, uint8_t const* key, int keylen, uintptr_t**userPointer ) {
+void AddFlowerHashEntry( struct flower_hash_lookup_block *hash, uint8_t const* key, size_t keylen, uintptr_t**userPointer ) {
 	insertFlowerHashEntry( &hash, key, keylen, userPointer, 0 );
 }
 

@@ -71,6 +71,20 @@ int main( void ) {
 		}
 	}
 
+	if(1)
+	{
+		DestroyFlowerHash( root );
+		root = InitFlowerHash( IFHEO_NO_DUPLICATES | IFHEO_IMMUTABLE );
+		for( n = 0; n < 237000; n++ ) {
+			int64_t r = ((int64_t)rand())* ((uint32_t)-1);
+			char* mykey = (char*)&r;
+			//r = r ^ ( r >> 24 ) ^ ( r << 8 ) ^ ( r << 16 );
+			uintptr_t* data;
+			AddFlowerHashEntry( root, (uint8_t*)&r, 8, &data );
+			data[0] = n;
+		}
+	}
+
 
 	{
 		int j;
