@@ -1,11 +1,28 @@
-﻿#if defined( INCLUDE_SACK_PLEASE )
+//#define USE_SACK_PORTABILITY
+#ifdef _MSC_VER
+#  define _CRT_SECURE_NO_WARNINGS
+#endif
+
+#if defined( USE_SACK_PORTABILITY )
 #  include "sack.h"
+
+#  define fa(b)   Release(b)
+#  define aa(a,s) HeapAllocateAligned(NULL,s,a)
+
 #else
+#if __GNUC__
+#  define __USE_ISOC11
+#    ifndef _WIN32
+#      include <features.h>
+#    endif
+#  endif
+#  define _ISOC11_SOURCE
 #  include <stdio.h>
 #  include <stdlib.h>
 #  include <stdint.h>
 #  include <string.h>
 #  include <malloc.h>
+#  include <limits.h>
 #  ifdef _WIN32
 #    include <Windows.h>
 #  else
@@ -35,7 +52,7 @@
 #    define PACKED
 #  endif
 
-#ifdef _MSC_VER
+#if defined( _WIN32 )
 #  define aa(a,s)  _aligned_malloc( s,a )
 #  define fa(b)    _aligned_free(b)
 #else
@@ -43,10 +60,7 @@
 #  ifdef _ISOC11_SOURCE
 #    define aa(a,s)  aligned_alloc(a,s)
 #  else
-#    define INCLUDE_SACK_PLEASE
-#    undef fa
-#    define fa(b)   Release(b)
-#    define aa(a,s) HeapAllocateAligned(NULL,s,a)
+#    error no definition for aligned_alloc or _alligned_malloc could be ciphered.
 #  endif
 #endif
 
@@ -57,7 +71,6 @@
 
 #define NewPlus(type,extra)   ((type*)aa( 4096,(sizeof(type)+((extra)+4095))&~4095))
 #define New(type)              (type*)aa( 4096,(sizeof(type)+4095)&~4095)
-#define allocate_aligned(a,s)         aa( s,a )
 
 //----------- FLAG SETS (single bit fields) -----------------
 /* the default type to use for flag sets - flag sets are arrays of bits
@@ -187,7 +200,7 @@ PREFIX_PACKED struct key_data_entry
 	//FPI key_data_offset;  // small integer, max of N directoryEntries * maxKeyLength bytes.
 	//                      // this offset is applied to flower_hash_lookup_block.key_data_first_block
 
-	uint16_t stored_data; // the data this results with; some user pointer sized value.
+	uintptr_t stored_data; // the data this results with; some user pointer sized value.
 #ifdef FLOWER_HASH_ENABLE_LIVE_USER_DATA
 	uintptr_t** user_data_; // Store the user's reference so it can be updated when this entry moves.
 #endif
@@ -296,9 +309,13 @@ PREFIX_PACKED struct flower_hash_lookup_block
 		// If the hash table is read first, convertible must also be used, otherwise entries
 		// 
 		unsigned  dense : 1;
+		// when adding a duplicate key, return existing entry instead of adding the new entry
+		// repeatedly.  (locate can currently only find one of them (order uncertain) anyway)
+		unsigned  no_dup : 1;
 		// this interprets baseOffset as a function pointer to be called later...
 		// 
 		unsigned  externalAllocator : 1;
+		unsigned  used : 12;
 	} info;
 
 	// these are values to be checked in this node.
@@ -322,6 +339,7 @@ enum insertFlowerHashEntryOptions {
 	IFHEO_IMMUTABLE = 1,  // the tree won't change; if an overflow happens, follow into hash table; implies dense in that aspect. 
 	IFHEO_CONVERTIBLE = 2,
 	IFHEO_DENSE = 4, // follow hash last
+	IFHEO_NO_DUPLICATES = 8, // return existing entry instead of a new; do not fault insert.
 };
 
 // Allocates an empty has tree root.
@@ -390,7 +408,7 @@ void DestroyFlowerHash( struct flower_hash_lookup_block* hash );
 //    AddFlowerHashEntry( root, "key", 3, &storage );
 //    storage[0] = myValue;
 //
-void AddFlowerHashEntry( struct flower_hash_lookup_block *hash, uint8_t const* key, int keylen, uintptr_t**dataStorage );
+void AddFlowerHashEntry( struct flower_hash_lookup_block *hash, uint8_t const* key, size_t keylen, uintptr_t**dataStorage );
 
 // readonly operation, if the key does not exist, results NULL.
 //
@@ -407,6 +425,6 @@ void AddFlowerHashEntry( struct flower_hash_lookup_block *hash, uint8_t const* k
 uintptr_t* FlowerHashShallowLookup( struct flower_hash_lookup_block *hash, uint8_t const* key, size_t keylen );
 
 // unimplemented
-void DeleteFlowerHashEntry( struct flower_hash_lookup_block *hash, uint8_t const*key, int keylen );
+void DeleteFlowerHashEntry( struct flower_hash_lookup_block *hash, uint8_t const*key, size_t keylen );
 
 

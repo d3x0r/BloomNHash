@@ -1,12 +1,31 @@
+# Bloom N-Hash
+
+This is a hash project which uses a combined binary search tree and N-way hash, where each hash bucket
+is another searchable tree, with more buckets.
+
+This is optimized to use the least continuous memory blocks as it can; trying to keep most operations
+to 2-3 pages of memory...
 
 
-# Object Storage Hash Principles
-
+[Originally started with a gist...](https://gist.github.com/d3x0r/dc8a5638fa75520376911b05faf9fc88)
 
 ## Building related sources
 
-I used the source and header from here for a few small utility things.
-https://github.com/d3x0r/micro-C-Boost-Types (rename sack_ucb_typelib.* to sack.* )
+Assumes C99 `stdint.h` availability.
+
+
+There is an included 'testHash.c' which can be built against
+  - userDataPointer/genhash_sparse.c
+  - computeOnly/genhash.c
+
+Platform specific things it uses
+  - an aligned-allocator (returns structures on a fixed page boundary).
+
+
+No additional dependancies are required; originally used SACK as a springboard, but have intead internallized
+all applicable cross platform funcationality used.  Things such as FLAGSET for dealing with arrays of bits are
+copied into this for use.  ~~I used the source and header from here for a few small utility things.
+[this SACK amalgamantion](https://github.com/d3x0r/micro-C-Boost-Types) (rename sack_ucb_typelib.* to sack.* )~~
 
 
 ## Flowering Hash Model
