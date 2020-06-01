@@ -32,8 +32,10 @@ function BloomNHash( ) {
 BloomNHash.prototype.get = function( key ) {
 	const result = {};
 	lookupFlowerHashKey( this.root, key, result );
-	if( result.hash )
+	if( result.hash ) {
 	        return result.hash.entries[result.entryIndex];
+
+	}
 	return undefined;
 }
 
@@ -93,26 +95,27 @@ function lookupFlowerHashKey( hash, key, result ) {
 		// look in the binary tree of keys in this block.
 		let curName = ROOT_ENTRY_INDEX;//treeEnt( 0, 0, KEY_DATA_ENTRIES_BITS );
 		let curMask = ROOT_ENTRY_MASK;
+
 		while( curMask )
 		{
 			const entkey=hash.keys[curName];
 			if(!entkey)  break; // no more entries to check.
 			// sort first by key length... (really only compare same-length keys)
 			let d = key.length - entkey.length;
-			curName &= ~( curMask >> 1 );
 			if( ( d == 0 ) && ( d = key.localeCompare(entkey ) ) == 0 ) {
 				result.entryIndex = curName;
 				result.entryMask = curMask;
 				result.hash = hash;
 				return hash.entries[curName];
 			}
+			curName &= ~( curMask >> 1 );
 			if( d > 0 ) curName |= curMask;
 			curMask >>= 1;
 		}
 		{
 			// follow converted hash blocks...
 			const nextblock = hash.nextBlock[key.codePointAt(0) & HASH_MASK];
-			if( nextblock ) {
+			if( nextblock ) {			
 				if( hash.parent ) key = key.substr(1);
 				hash = nextblock;
 				continue;
@@ -414,8 +417,8 @@ function insertFlowerHashEntry( hash
 	, key
 	, result
 ) {
-	let entryIndex = treeEnt( 0, 0, KEY_DATA_ENTRIES_BITS );
-	let entryMask = 1 << getLevel( entryIndex ); // index of my zero.
+	let entryIndex = ROOT_ENTRY_INDEX;
+	let entryMask = ROOT_ENTRY_MASK; // index of my zero.
 	let edge = -1;
 	let edgeMask;
 	let leastEdge = KEY_DATA_ENTRIES;
@@ -428,19 +431,20 @@ function insertFlowerHashEntry( hash
 	}
 	let next;
 
-	full = hash.used.getBit( entryIndex >> 1 ) != 0;
 	{
 		c++;
 		if( HASH_DEBUG_BLOCK_DUMP_INCLUDED ) {
 		//	if( ( c > ( 294050 ) ) )
-				dump = 1;
+		//		dump = 1;
 		}
 	}
 
-console.log( "START SERACH:", entryIndex, entryMask.toString(2))
 	while( 1 ) {
 		let d_ = 1;
 		let d = 1;
+		full = hash.used.getBit( entryIndex >> 1 );
+		//if( hash.parent )
+		//	dump = 1;
 		while( 1 ) {
 
 			const offset = hash.keys[entryIndex];
@@ -556,7 +560,7 @@ if( FLOWER_DIAGNOSTIC_DEBUG ) {
 						edgeMask = entryMask>>1;
 						//console.log( "Edge follow: %d %s %d  %s", edge, toBinary( edge ), entryIndex, toBinary( entryIndex ) );
 					}
-				console.log( "D:", d, entryIndex, entryMask.toString(2) );
+
 					if( d_ ) {
 						if( d ) {
 							entryIndex &= ~( entryMask >> 1 );
@@ -565,7 +569,6 @@ if( FLOWER_DIAGNOSTIC_DEBUG ) {
 						}
 					}
 					else {
-
 						//break;
 					}
 					if(! hash.keys[entryIndex] )
@@ -807,42 +810,37 @@ if( FLOWER_DIAGNOSTIC_DEBUG ) {
 				break;
 			}
 			else {
-			// this entry is free, save here...
-			hash.keys[entryIndex] = key;
-			//console.log( "B Store at %d  %s", entryIndex, toBinary( entryIndex ) );
-			if( !( entryIndex & 1 ) ) { // filled a leaf.... 
-				if( ( entryMask == 1 && ( entryIndex ^ 2 ) >= KEY_DATA_ENTRIES ) || hash.keys[entryIndex ^ ( entryMask << 1 )] ) { // if other leaf is also used
-					updateFullness( hash, entryIndex, entryMask );
+				// this entry is free, save here...
+				hash.keys[entryIndex] = key;
+				//console.log( "B Store at %d  %s", entryIndex, toBinary( entryIndex ) );
+				if( !( entryIndex & 1 ) ) { // filled a leaf.... 
+					if( ( entryMask == 1 && ( entryIndex ^ 2 ) >= KEY_DATA_ENTRIES ) || hash.keys[entryIndex ^ ( entryMask << 1 )] ) { // if other leaf is also used
+						updateFullness( hash, entryIndex, entryMask );
+					}
 				}
-			}
-if( HASH_DEBUG_BLOCK_DUMP_INCLUDED ) {
-			if( dump )
-				dumpBlock( hash );
-			if( dump )
-				console.log( "Added at %d", entryIndex );
-			validateBlock( hash );
-}
-			result.entryIndex = entryIndex;
-			result.entryMask = entryMask;
-			result.hash = hash;
-			return;
+				if( HASH_DEBUG_BLOCK_DUMP_INCLUDED ) {
+					if( dump )
+						dumpBlock( hash );
+					if( dump )
+						console.log( "Added at %d", entryIndex );
+					validateBlock( hash );
+				}
+				result.entryIndex = entryIndex;
+				result.entryMask = entryMask;
+				result.hash = hash;
+				return;
 			}
 		}
 
 		if( !( next = hash.nextBlock[key.codePointAt(0) & HASH_MASK] ) ) {
-			if( 0 )
-				// can move entries from here to free up space when 
-				// making a new block...
-				next = convertFlowerHashBlock( hash );
-			else {
-				next = ( hash.nextBlock[key.codePointAt(0) & HASH_MASK] = new hashBlock( hash ) );
-				//next.info.usedEntries = 0;
-			}
-			if( hash.parent ) {
-				key = key.substr(1);
-			}
+			if( 0 ) next = convertFlowerHashBlock( hash );
+			else next = ( hash.nextBlock[key.codePointAt(0) & HASH_MASK] = new hashBlock( hash ) );
 		}
+		if( hash.parent )
+			key = key.substr(1);
 		hash = next;
+		entryIndex = ROOT_ENTRY_INDEX;
+		entryMask = ROOT_ENTRY_MASK;
 
 	}
 }
