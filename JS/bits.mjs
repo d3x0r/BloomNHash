@@ -2,7 +2,7 @@
 
 function bitReader( bits ) {
 	if( "number" === typeof bits ) {
-		bits = new Uint8array( ( (bits+7)/8)|0 );
+		bits = new Uint8Array( ( (bits+7)/8)|0 );
 	}else if( !bits ) 
 		bits = 
 
@@ -28,6 +28,14 @@ function bitReader( bits ) {
 			this.available = 0;
 			this.used = 0;
 			this.total_bits = 0;
+		},
+		get(N) {
+			const bit = this.entropy[N>>3] & ( 1 << (N&7)) ;
+			if( bit ) return true; 
+			return false;
+		},
+		set(N) {
+			this.entropy[N>>3] |= ( 1 << (N&7)) ;
 		},
 		getBit(N) {
 			const bit = this.entropy[N>>3] & ( 1 << (N&7)) ;
