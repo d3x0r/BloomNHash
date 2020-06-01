@@ -251,6 +251,9 @@ function firstZero(n,depth) { return firstZero32_(n,0,depth,()=>depth) }
 #    pragma pack (push, 1)
 #  endif
 
+#define ROOT_ENTRY_INDEX treeEnt( 0, 0, KEY_DATA_ENTRIES_BITS )
+#define ROOT_ENTRY_MASK  (1<<(KEY_DATA_ENTRIES_BITS-1))
+
 
 // Current configuration has 237 entries and is 4084 byes long.
 // that leads to 128 bits to track free space   (64+32+16+8+4+2+1) 127

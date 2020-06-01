@@ -566,8 +566,8 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 ) {
 	if( keylen > 255 ) { printf( "Key is too long to store.\n" ); userPointer[0] = NULL; return; }
 	struct flower_hash_lookup_block* hash = hash_[0];
-	int entryIndex = treeEnt( 0, 0, KEY_DATA_ENTRIES_BITS );
-	int entryMask = 1 << getLevel( entryIndex ); // index of my zero.
+	int entryIndex = ROOT_ENTRY_INDEX;
+	int entryMask = ROOT_ENTRY_MASK; // index of my zero.
 	int edge = -1;
 	int edgeMask;
 	int leastEdge = KEY_DATA_ENTRIES;
@@ -580,7 +580,6 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 #endif
 	struct flower_hash_lookup_block* next;
 
-	full = TESTFLAG( hash->used_key_data, entryIndex >> 1 ) != 0;
 	{
 		c++;
 #ifdef HASH_DEBUG_BLOCK_DUMP_INCLUDED
@@ -597,14 +596,12 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 		do {
 			if( full && ( hash->info.convertible || hash->info.dense ) ) {
 				convertFlowerHashBlock( hash );
-				full = TESTFLAG( hash->used_key_data, entryIndex >> 1 ) != 0;
 			}
 			if( next = hash->next_block[key[0] & HASH_MASK] ) {
 				if( hash->parent ) {
 					key++; keylen--;
 				}
 				hash = next;
-				full = TESTFLAG( hash->used_key_data, entryIndex >> 1 ) != 0;
 			}
 		} while( next );
 	}
@@ -612,6 +609,7 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 	while( 1 ) {
 		int d_ = 1;
 		int d = 1;
+		full = TESTFLAG( hash->used_key_data, entryIndex >> 1 ) != 0;
 		while( 1 ) {
 
 			int offset = 0;
@@ -1078,6 +1076,8 @@ static void insertFlowerHashEntry( struct flower_hash_lookup_block* *hash_
 				}
 			}
 			hash = next;
+			entryIndex = ROOT_ENTRY_INDEX;
+			entryMask = ROOT_ENTRY_MASK;
 		}
 		else break;
 	}
