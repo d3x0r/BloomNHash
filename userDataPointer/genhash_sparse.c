@@ -163,7 +163,7 @@ void lookupFlowerHashKey( struct flower_hash_lookup_block **root, uint8_t const 
 		}
 		// look in the binary tree of keys in this block.
 		int curName = treeEnt( 0, 0, KEY_DATA_ENTRIES_BITS );
-		int curMask = ( 1 << KEY_DATA_ENTRIES_BITS ) - 1;
+		int curMask = ( 1 << ( KEY_DATA_ENTRIES_BITS - 1 ) );
 		next_entries = hash->entries;
 		while( curMask )
 		{
