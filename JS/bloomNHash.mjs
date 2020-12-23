@@ -20,8 +20,6 @@ const pft = (!FLOWER_TICK_PERF_COUNTERS)?{
 	 lenMovedRight : new Array(128)
 }:null;
 
-import {default as util} from 'util';
-
 import {bitReader} from "./bits.mjs";
 export {BloomNHash}
 

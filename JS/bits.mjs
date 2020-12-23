@@ -18,35 +18,34 @@ function bitReader( bits ) {
 	}
 
 	var bitReader = {
-		entropy: bits,  // the variable that is 'read'
+		bits: bits,  // the variable that is 'read'
 		available: 0,
 		used: 0,
 		total_bits : 0,
 
 		reset() {
-			//this.entropy = 
 			this.available = 0;
 			this.used = 0;
 			this.total_bits = 0;
 		},
 		get(N) {
-			const bit = this.entropy[N>>3] & ( 1 << (N&7)) ;
+			const bit = this.bits[N>>3] & ( 1 << (N&7)) ;
 			if( bit ) return true; 
 			return false;
 		},
 		set(N) {
-			this.entropy[N>>3] |= ( 1 << (N&7)) ;
+			this.bits[N>>3] |= ( 1 << (N&7)) ;
 		},
 		getBit(N) {
-			const bit = this.entropy[N>>3] & ( 1 << (N&7)) ;
+			const bit = this.bits[N>>3] & ( 1 << (N&7)) ;
 			if( bit ) return true; 
 			return false;
 		},
 		setBit(N) {
-			this.entropy[N>>3] |= ( 1 << (N&7)) ;
+			this.bits[N>>3] |= ( 1 << (N&7)) ;
 		},
 		clearBit(N) {
-			this.entropy[N>>3] &= ~( 1 << (N&7)) ;
+			this.bits[N>>3] &= ~( 1 << (N&7)) ;
 		},
 		getBits(start, count, signed) {
 			if( !count ) { count = 32; signed = true } 
@@ -110,13 +109,13 @@ function bitReader( bits ) {
 							// partial can never be greater than 8; request is never greater than 8
 							//if (partial_bits > 8)
 							//	partial_bits = 8;
-							partial_tmp = MY_GET_MASK(this.entropy, this.used, partial_bits);
+							partial_tmp = MY_GET_MASK(this.bits, this.used, partial_bits);
 						}
 						needBits();
 						bits -= partial_bits;
 					}
 					else {
-						tmp = MY_GET_MASK(this.entropy, this.used, get_bits);
+						tmp = MY_GET_MASK(this.bits, this.used, get_bits);
 						this.used += get_bits;
 						if (partial_bits) {
 							tmp = partial_tmp | (tmp << partial_bits);

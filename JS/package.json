@@ -1,0 +1,37 @@
+{
+  "name": "bloomnhash",
+  "version": "1.0.0",
+  "description": "Paged hash which registers with JSOX for storage.",
+  "main": "bloomNHash.cjs",
+  "module": "bloomNHash.mjs",
+  "type": "commonjs",
+  "exports": {
+    "index": "./bloomNHash.mjs",
+    "sack": "./bloomNHash.mjs",
+    "import": "./bloomNHash.mjs",
+    "require": "./bnh.cjs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "rollup --format=cjs --file=./bnh.js --no-esModule --  bloomNHash.mjs",
+    "build2": "rollup -c"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/d3x0r/BloomNHash.git"
+  },
+  "keywords": [
+    "hash"
+  ],
+  "devDependencies": {
+    "rollup": "latest",
+    "rollup-plugin-gzip": "latest",
+    "rollup-plugin-terser": "latest"
+  },
+  "author": "d3x0r",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/d3x0r/BloomNHash/issues"
+  },
+  "homepage": "https://github.com/d3x0r/BloomNHash#readme"
+}
