@@ -13,6 +13,7 @@ export default [
             format: 'cjs',
         },
         plugins: [
+            terser(),
         ],
     },
     // ES6 Modules Minified

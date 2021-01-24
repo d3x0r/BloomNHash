@@ -1,5 +1,5 @@
 {
-  "name": "bloomnhash",
+  "name": "@d3x0r/bloomnhash",
   "version": "1.0.0",
   "description": "Paged hash which registers with JSOX for storage.",
   "main": "bloomNHash.cjs",
