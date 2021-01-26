@@ -39,7 +39,7 @@ that apply to that stem to the new location; This operation is only the idea, no
 existing values could remain where they are, just creating a stem, on insertion, when there
 is no room in this directory tables; and putting only new values in the new location(s).
 
-![Flower Model Illustration](/d3x0r/dc8a5638fa75520376911b05faf9fc88/raw/floweringModel.png)
+![Flower Model Illustration](floweringModel.png)
 
 ## Implementation Details....
 
