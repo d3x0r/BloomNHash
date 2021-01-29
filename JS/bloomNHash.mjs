@@ -1,4 +1,8 @@
 
+const _debug_lookup = false;
+const _debug_root = false;
+const _debug_set = false;
+
 const BloomNHash_StorageTag = "?bh"
 const BloomNHash_BlockStorageTag = "?hb"
 const _debug_reload = false;
@@ -8,7 +12,6 @@ const HASH_MASK_BITS = 5;
 const HASH_MASK = (1<<HASH_MASK_BITS)-1;
 const ROOT_ENTRY_MASK = ( 1 << (KEY_DATA_ENTRIES_BITS-1) );
 const ROOT_ENTRY_INDEX = ROOT_ENTRY_MASK-1;
-
 
 const FLOWER_HASH_DEBUG_MOVES = false;
 const FLOWER_TICK_PERF_COUNTERS = false
@@ -32,7 +35,7 @@ let blockStorage = null;
 
 function BloomNHash( ) {
 	if( !(this instanceof BloomNHash) ) return new BloomNHash();
-        _debug_reload && console.log( "CREATE NEW BLOOM -------------------------------------------__" );
+	_debug_reload && console.log( "CREATE NEW BLOOM -------------------------------------------__" );
 	const root = this;
 	this.storage_ = null;
 	this.root = null;//new hashBlock();
@@ -40,7 +43,10 @@ function BloomNHash( ) {
 
 	function hashBlock( parent ){
 		var n;
-                _debug_reload && console.log( "New Hash block - should get a ROOT ------------ " );
+		_debug_reload && console.log( "New Hash block - should get a ROOT ------------ " );
+		// hide these from being written.
+		Object.defineProperty(this, "timer", { enumerable: false, writable: true, configurable: true, value: null });
+		Object.defineProperty(this, "coalescedWrites", { enumerable: false, writable: true, configurable: false, value: [] });
 		this.nextBlock = [];
 		this.entries = [];
 		this.keys = [];
@@ -60,16 +66,16 @@ function BloomNHash( ) {
 		this.getStorage = function() {
 			return root.storage_;
 		}
-	        if( !root.root ) {
-                	_debug_reload && console.log( "Root root:", root, root.root, this );
+	      if( !root.root ) {
+				_debug_reload && console.log( "Root root:", root, root.root, this );
 			root.root = this;
 			root.storage_.put( root );
 		}
 	}
-	if( nextStorage ) {
+	if( blockStorage || nextStorage ) {
 		if( !this.storage_ ) {
-			this.storage_ = nextStorage;
-			blockStorage  = nextStorage;
+			this.storage_ = blockStorage || nextStorage;
+			blockStorage  = blockStorage || nextStorage;
 			nextStorage = null;
 			this.storage_.addEncoders( [ { tag:BloomNHash_BlockStorageTag, p:this.hashBlock, f:null } ] );
 			this.storage_.addDecoders( [ { tag:BloomNHash_BlockStorageTag, p:this.hashBlock, f:null } ] );
@@ -89,7 +95,35 @@ function BloomNHash( ) {
 		return DeleteFlowerHashEntry( this, key );
 	}
 	hashBlock.prototype.store = function() {
-		return root.storage_.put( this );
+		const wait = new Promise( (res,rej)=>{
+			this.coalescedWrites.push( {res:res,rej:rej} );
+		} )
+
+		if( !this.timer ) {
+			this.timer = setTimeout( doStore.bind(this), 10 );
+		}	else {
+			clearTimeout( this.timer );
+			this.timer = setTimeout( doStore.bind(this), 10 );
+		}
+		return wait;
+
+		function doStore() {
+			this.timer = null;
+			console.log( "do actual storage...", this);
+			return root.storage_.put( this ).then( (obj)=>{
+				for( let res of this.coalescedWrites ) {
+					res.res( obj );// probably didn't care about this result.
+				}
+				this.coalescedWrites.length = 0;
+				return obj;
+			} ).catch( (obj)=>{
+				for( let res of this.coalescedWrites ) {
+					console.log( "obj:", res );
+					res.rej( obj );// probably didn't care about this result.
+				}
+				this.coalescedWrites.length = 0;
+			} );
+		}
 	}
 
 	return;
@@ -111,8 +145,11 @@ function linearToTreeIndex( f_ )
 
 // returns pointr to user data value
 function lookupFlowerHashEntry( hash, key, result ) {
-
+	_debug_lookup && console.log( "Actually doing lookup; otherwise how did it resolve already?" );
+	if( "number" === typeof key ) 
+		key = '' + key;
 	if( !key ) {
+		console.log( "null key:", key );
 		result.hash = null;
 		return; // only look for things, not nothing.
 	}
@@ -133,9 +170,11 @@ function lookupFlowerHashEntry( hash, key, result ) {
 				result.entryMask = curMask;
 				result.hash = hash;
 				if( hash.entries[curName] instanceof Promise ) {
-					return root.storage_.map( hash, { depth:0, paths:[ ["entries", curName] ] } ).then( (hash)=>{
-						return lookupFlowerHashEntry( hash, key, result );
+					const result = root.storage_.map( hash, { depth:-1, paths:[ ["entries", curName] ] } ).then( (hash)=>{
+						_debug_lookup && console.log( "This should be the value in the entry...", key );
+						return hash.entries[curName];//lookupFlowerHashEntry( hash, key, result );
 					} );
+					return result;
 				}
 				return Promise.resolve( hash.entries[curName] );
 			}
@@ -143,6 +182,7 @@ function lookupFlowerHashEntry( hash, key, result ) {
 			if( d > 0 ) curName |= curMask;
 			curMask >>= 1;
 		}
+		_debug_lookup && console.log( "failed to find in hash...", key );
 		{
 			const hid = key.codePointAt(0) & HASH_MASK;
 			// follow converted hash blocks...
@@ -150,9 +190,11 @@ function lookupFlowerHashEntry( hash, key, result ) {
 			if( nextblock ) {			
 				if( hash.parent ) key = key.substr(1);
 				if( nextblock instanceof Promise ) {
-					return root.storage_.map( hash, {depth:0, paths: [["nextBlock", hid]] } ).then( (hash)=>{
+					console.log( "next block is a promise we need to load" );
+					const result = root.storage_.map( hash, {depth:0, paths: [["nextBlock", hid]] } ).then( (hash)=>{
 						return lookupFlowerHashEntry( hash.nextBlock[hid], key, result );
 					} );
+					return result;
 				} 
 				hash = nextblock;
 				continue;
@@ -383,7 +425,13 @@ function validateBlock( hash ) {
 
 function moveOneEntry( hash,  from,  to,  update ) {
 	hash.keys[to] = hash.keys[from];
-	hash.entries[to] = hash.entries[from];
+	const e = hash.entries[to] = hash.entries[from];
+	if( e instanceof Promise ) {
+		const cr = hash.getStorage().getContainerRef( e );
+		//console.log( "Care must be taken...", cr, to, from );
+		if( cr )
+			cr.d.r.f = to;
+	}
 	if( update )
 		if( to < from ) {
 			upLeftSideTree( hash, to, 1 << getLevel( to ) );
@@ -397,15 +445,39 @@ function moveTwoEntries( hash,  from,  to,  update ) {
 	const to_ = to;
 	if( from > to ) {
 		hash.keys[to] = hash.keys[from];
-		hash.entries[to++] = hash.entries[from++];
+		const e = hash.entries[to++] = hash.entries[from++];
+		if( e instanceof Promise ) {
+			const cr = hash.getStorage().getContainerRef( e );
+			//console.log( "2Care must be taken...", cr, to );
+			if( cr )
+				cr.d.r.f = to_;
+		}
 		hash.keys[to] = hash.keys[from];
 		hash.entries[to] = hash.entries[from];
+		if( e instanceof Promise ) {
+			const cr = hash.getStorage().getContainerRef( e );
+			//console.log( "3Care must be taken...", cr, to );
+			if( cr )
+				cr.d.r.f = to;
+		}
 	}
 	else {
 		hash.keys[++to] = hash.keys[++from];
 		hash.entries[to--] = hash.entries[from--];
+		if( e instanceof Promise ) {
+			const cr = hash.getStorage().getContainerRef( e );
+			//console.log( "4Care must be taken...", cr, to+1 );
+			if( cr )
+				cr.d.r.f = to_;
+		}
 		hash.keys[to] = hash.keys[from];
 		hash.entries[to] = hash.entries[from];
+		if( e instanceof Promise ) {
+			const cr = hash.getStorage().getContainerRef( e );
+			//console.log( "5Care must be taken...", cr, to );
+			if( cr )
+				cr.d.r.f = to;
+		}
 	}
 	if( update )
 		if( to < from ) {
@@ -859,9 +931,9 @@ function insertFlowerHashEntry( hash
 			if( 0 ) next = convertFlowerHashBlock( hash );
 			else {
 				next = ( hash.nextBlock[key.codePointAt(0) & HASH_MASK] = new hashBlock( hash ) );
-				console.log( "Update, because we added a child hash." );
+				_debug_set && console.log( "Update, because we added a child hash." );
 				if( root.storage_ ) {
-					root.storage_.put( hash );
+					hash.store();
 				}
 			}
 		}
@@ -1245,12 +1317,11 @@ function dumpBlock_( hash, opt ) {
 		}
 	}
 
-
-	//for( n = 0; n < ( HASH_MASK + 1 ); n++ ) {
+//	for( n = 0; n < ( HASH_MASK + 1 ); n++ ) {
 //		if( hash.nextBlock[n] ) dumpBlock_( hash.nextBlock[n], opt+1 );
 //	}
 
-}
+} // -------------- end of BlooMNHash
 
 function dumpBlock( hash ) {
 	dumpBlock_( hash, 1 );
@@ -1259,52 +1330,66 @@ function dumpBlock( hash ) {
 
 }
 
-const gets = [];
+let gets = [];
 let getting = false;
 
 BloomNHash.prototype.get = function( key ) {
-	//console.log( "... right? Get key?", key );
 	if( getting ) {
-            console.log( "Getting is still set, delay." );
+		_debug_lookup && console.log( "Getting is still set, delay." );
 		const g = { t:this, key:key, res:null, rej:null };
 		gets.push( g );
 		return new Promise( (res,rej)=>((g.res=res),(g.rej=rej)) );
 	}
-        //console.log( "Root?", this );
 	if( !this.root ) {
-            console.log( "No objects in hash; return 'undefined'" );
-            return Promise.resolve( undefined );
-        }
+		console.log( "No objects in hash; return 'undefined'" );
+		return Promise.resolve( undefined );
+	}
 	getting = true;
 	const result = {};
 	//console.trace( "Get:", this, key );
-        const self = this;
+	const self = this;
 	const doit = function (thing){// thisless
-            //console.log( "Self Root:", this, thing, self, self.root );
-            if( self.root instanceof Promise ) {
-                	console.log( "Root is still mapping?" );
-                	return self.root.then((root)=>{
-			    root.lookupFlowerHashEntry( key, result ).then( (obj)=>{
-			console.log( "Lookup finally resulted, and set getting = false..." );
-			getting = false;
-			if( gets.length ) {
-				const g = gets.shift();
-				console.log( "doing an existing get:", g );
-				g.t.get( g.key ).then( g.res ).catch( g.rej );
-			}
-			return obj;
-		} );    
-			} );
+	//console.log( "Self Root:", this, thing, self, self.root );
+	if( self.root instanceof Promise ) {
+		_debug_lookup && console.log( "Root is still mapping?" );
+		return self.root.then((root)=>{
+			root.lookupFlowerHashEntry( key, result ).then( (obj)=>{
+				_debug_lookup && console.log( "Lookup finally resulted, and set getting = false...(and do gets)", gets, obj );
+				getting = false;
+				if( gets.length ) {
+					const g = gets;
+					gets = [];
+					return getone( g ).then( ()=>obj );
+				}
+				return obj;
+			} );    
+		} );
+	}
 
-            }
-            //console.log( "THIS:", key );
+	function getone(gets_)
+	{
+		const g = gets_.shift();
+		_debug_lookup && console.log( "doing an existing get(1):", g );
+		return g.t.get( g.key ).then( (obj)=>{
+				_debug_lookup && console.log( "doing a get something", g, obj );
+				if( gets_.length ) return getone( gets_ )
+				if( gets.length ) {
+					const g = gets;
+					gets = [];
+					return getone(g).then( ()=>obj);
+				}
+				g.res( obj ) 
+				return obj;
+			}).catch( g.rej );
+	}
+
 		return self.root.lookupFlowerHashEntry( key, result ).then( (obj)=>{
-			console.log( "(2)Lookup finally resulted, and set getting = false..." );
+			_debug_lookup && console.log( "(2)Lookup finally resulted, and set getting = false...", obj );
 			getting = false;
 			if( gets.length ) {
-				const g = gets.shift();
-				console.log( "doing an existing get:", g );
-				g.t.get( g.key ).then( g.res ).catch( g.rej );
+				const g = gets;
+				gets = [];
+				return getone(g).then( ()=>obj );
 			}
 			return obj;
 		} );
@@ -1322,22 +1407,29 @@ BloomNHash.prototype.get = function( key ) {
 const inserts = [];
 let inserting = false;
 BloomNHash.prototype.set = function( key, val ) {
+	if( this.root instanceof Promise ) {
+		return blockStorage.map( this, {depth:0,} ).then( (realroot)=>{
+			return this.set( key, val );
+		} );
+	}
+
 	if( inserting ) {
 		let i;
 		inserts.push( i = {t:this, key:key,val:val,res:null,rej:null } );
 		return new Promise( (res,rej)=>((i.res=res),(i.rej=rej)));
 	}
 	inserting = true;
-
+	if( "number" === typeof key ) key = '' + key;
 	const result = {};
 
 	if( !this.root ) new this.hashBlock(null);
-        console.log( "This.root SHOULD be set...", this.root );
+
+	_debug_root && console.log( "This.root SHOULD be set...", this.root );
 	return this.root.insertFlowerHashEntry( key, result ).then( (res)=>{
 		//console.log( "SET ENTRY:", result.entryIndex, val );
         	result.hash.entries[result.entryIndex] = val;
 		if( this.storage_ ) {
-			this.storage_.put( result.hash );
+			result.hash.store();
 		}
 		inserting = false;
 		if( inserts.length ) {
