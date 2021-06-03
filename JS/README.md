@@ -6,6 +6,7 @@ import {BloomNHash} from "./bloomNHash.mjs"
 {
 	const hash = new BloomNHash();
         hash.set( "asdf", 1 );
-        hash.get( "asdf" );
+        const value = hash.get( "asdf" );
+	// value = 1.
         hash.delete( "asdf" );
 }

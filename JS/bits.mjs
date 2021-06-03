@@ -74,7 +74,6 @@ class BitReader {
 		}
 	}
 
-	Object.assign( this, bitReader_ );
 }
 
 //module.exports = exports = bitReader;
