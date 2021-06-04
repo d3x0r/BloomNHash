@@ -77,4 +77,4 @@ class BitReader {
 }
 
 //module.exports = exports = bitReader;
-export {bitReader};
+export {BitReader};
