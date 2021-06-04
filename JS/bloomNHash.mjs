@@ -30,7 +30,7 @@ let gets = [];
 let getting = false;
 
 
-import {bitReader} from "./bits.mjs";
+import {BitReader} from "./bits.mjs";
 //export {BloomNHash}
 let nextStorage = null;
 let blockStorage = null; // this should be the general public storage?  (can fallback to internal reference now?)
@@ -65,7 +65,7 @@ function BloomNHash( storage ) {
 			this.entries.push(null);
 			this.keys.push(null);
 		}
-		this.used = bitReader( KEY_DATA_ENTRIES>>1 );
+		this.used = new BitReader( KEY_DATA_ENTRIES>>1 );
 		//console.log( "ROOT:", root.storage_ );
 		this.used.hook( root.storage_ );
 		this.getStorage = function() { return root.storage_ }
