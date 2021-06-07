@@ -18,7 +18,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/d3x0r/BloomNHash.git"
+    "url": "git+https://github.com/d3x0r/BloomNHash-js.git"
   },
   "keywords": [
     "hash"
@@ -31,7 +31,7 @@
   "author": "d3x0r",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/d3x0r/BloomNHash/issues"
+    "url": "https://github.com/d3x0r/BloomNHash-js/issues"
   },
-  "homepage": "https://github.com/d3x0r/BloomNHash#readme"
+  "homepage": "https://github.com/d3x0r/BloomNHash-js#readme"
 }

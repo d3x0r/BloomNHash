@@ -10,12 +10,13 @@ class BitReader {
 		if( "number" === typeof bits ) {
 			bits = new Uint8Array( ( (bits+7)/8)|0 );
 		}
+                this.entropy = bits;
 	}
 
 	hook( storage ) {
 		if( !storages.find( s=>s===storage ) ) {
-			storage.addEncoders( [ { tag:"btr", p:bitReader, f:this.encode } ] );
-			storage.addDecoders( [ { tag:"btr", p:bitReader, f:this.decode } ] );
+			storage.addEncoders( [ { tag:"btr", p:BitReader, f:this.encode } ] );
+			storage.addDecoders( [ { tag:"btr", p:BitReader, f:this.decode } ] );
 			storages.push( storage );
 		}
 		this.storage_ = storage;
